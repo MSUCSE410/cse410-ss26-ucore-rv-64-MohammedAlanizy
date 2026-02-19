@@ -39,20 +39,15 @@ uint64 sys_gettimeofday(TimeVal *val, int _tz)
 /*
 * LAB1: you may need to define sys_task_info here
 */
-int sys_task_info(struct TaskInfo *ti) {
+int sys_task_info(struct TaskInfo *ti)
+{
 	struct proc *p = curr_proc();
-	
-	// set the status to Running
 	ti->status = Running;
-	
-	// compute ms elapsed since first scheduled
 	ti->time = (get_cycle() - p->start_time) / (CPU_FREQ / 1000);
-	
-	// move the syscall tracker array safely into the user struct
 	memmove(ti->syscall_times, p->syscall_times, sizeof(p->syscall_times));
-	
 	return 0;
 }
+
 extern char trap_page[];
 
 void syscall()

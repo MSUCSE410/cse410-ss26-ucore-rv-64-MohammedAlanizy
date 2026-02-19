@@ -2,6 +2,7 @@
 #define PROC_H
 
 #include "types.h"
+
 #define NPROC (16)
 
 // Saved registers for kernel context switches.
@@ -45,6 +46,7 @@ struct proc {
 * LAB1: you may need to define struct for TaskInfo here
 */
 #define MAX_SYSCALL_NUM 500
+
 typedef enum {
 	UnInit,
 	Ready,
