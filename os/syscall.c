@@ -72,65 +72,79 @@ int sys_task_info(struct TaskInfo *ti) {
 
 uint64 sys_mmap(uint64 start, uint64 len, int port, int flag, int fd) {
 	if (len == 0) return 0;
-	if (len > 1024 * 1024 * 1024) return -1; // if it's 1 gigya upper limit check
-	if ((port & ~0x7) != 0) return -1;       // all other bits must be 0
-	if ((port & 0x7) == 0) return -1;        // if unreadable/unwritable/unexecutable is meaningless
+	if (len > 1024ULL * 1024ULL * 1024ULL) return -1;
+	if ((port & ~0x7) != 0) return -1; 
+	if ((port & 0x7) == 0) return -1;  
 
-	uint64 a = PGROUNDDOWN(start);
+	// start address MUST be page aligned
+	if (start % PGSIZE != 0) return -1;
+
+	uint64 a = start;
 	uint64 last = PGROUNDDOWN(start + len - 1);
 	struct proc *p = curr_proc();
 	
-	// permissions from port to PTE flags
 	int perm = PTE_U;
 	if (port & 1) perm |= PTE_R;
 	if (port & 2) perm |= PTE_W;
 	if (port & 4) perm |= PTE_X;
 
-	// check if any page in the range is already mapped
+	// safely check if any page in the range is already valid using walk()
 	for (uint64 va = a; va <= last; va += PGSIZE) {
-		if (walkaddr(p->pagetable, va) != 0) {
-			return -1; 
+		pte_t *pte = walk(p->pagetable, va, 0);
+		if (pte != 0 && (*pte & PTE_V) != 0) {
+			return -1; // page already mapped
 		}
 	}
 
-	// start allocate and map the physical pages
+	// allocate and map the physical pages
 	for (uint64 va = a; va <= last; va += PGSIZE) {
 		void *pa = kalloc();
 		if (pa == 0) {
-			// if it's insufficient physical memory then rollback previous allocations.
-			uvmunmap(p->pagetable, a, (va - a) / PGSIZE, 1);
+			if (va > a) uvmunmap(p->pagetable, a, (va - a) / PGSIZE, 1);
 			return -1; 
 		}
+		
+		memset(pa, 0, PGSIZE); 
+		
 		if (mappages(p->pagetable, va, PGSIZE, (uint64)pa, perm) != 0) {
 			kfree(pa);
-			uvmunmap(p->pagetable, a, (va - a) / PGSIZE, 1);
+			if (va > a) uvmunmap(p->pagetable, a, (va - a) / PGSIZE, 1);
 			return -1;
 		}
 	}
+	
+	sfence_vma(); 
 	return 0;
 }
 
 uint64 sys_munmap(uint64 start, uint64 len) {
 	if (len == 0) return 0;
 	
-	uint64 a = PGROUNDDOWN(start);
+	// start address MUST be page aligned
+	if (start % PGSIZE != 0) return -1;
+	
+	uint64 a = start;
 	uint64 last = PGROUNDDOWN(start + len - 1);
 	struct proc *p = curr_proc();
 
-	// ensure all pages in the range are actually mapped
+	// ensure all pages in the range actually exist
 	for (uint64 va = a; va <= last; va += PGSIZE) {
-		if (walkaddr(p->pagetable, va) == 0) {
-			return -1; // unmapped virtual memory exists
+		pte_t *pte = walk(p->pagetable, va, 0);
+		if (pte == 0 || (*pte & PTE_V) == 0) {
+			return -1; // Uunmapped virtual memory exists
 		}
 	}
 
-	// start unmap and free the physical memory
-	for (uint64 va = a; va <= last; va += PGSIZE) {
-		uvmunmap(p->pagetable, va, 1, 1);
-	}
+	// unmap and free the physical memory
+	uint64 npages = ((last - a) / PGSIZE) + 1;
+	uvmunmap(p->pagetable, a, npages, 1);
+	
+	sfence_vma();
 	return 0;
 }
-
+uint64 sys_getpid() {
+	return curr_proc()->pid;
+}
 extern char trap_page[];
 
 void syscall()
@@ -171,6 +185,9 @@ void syscall()
 		break;
 	case SYS_munmap:
 		ret = sys_munmap(args[0], args[1]);
+		break;
+	case SYS_getpid:
+		ret = sys_getpid();
 		break;
 	default:
 		ret = -1;
