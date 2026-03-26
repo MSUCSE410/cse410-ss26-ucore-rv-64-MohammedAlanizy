@@ -35,15 +35,22 @@ uint64 sys_sched_yield()
 uint64 sys_gettimeofday(TimeVal *val, int _tz) // TODO: implement sys_gettimeofday in pagetable. (VA to PA)
 {
 	// YOUR CODE
-	val->sec = 0;
-	val->usec = 0;
+	uint64 pa = useraddr(curr_proc()->pagetable, (uint64)val);
+	if (pa == 0) return -1;
+
+	TimeVal *pa_val = (TimeVal *)pa;
+	uint64 cycle = get_cycle();
+	
+	pa_val->sec = cycle / CPU_FREQ;
+	pa_val->usec = (cycle % CPU_FREQ) * 1000000 / CPU_FREQ;
+	
+	return 0;
 
 	/* The code in `ch3` will leads to memory bugs*/
 
 	// uint64 cycle = get_cycle();
 	// val->sec = cycle / CPU_FREQ;
 	// val->usec = (cycle % CPU_FREQ) * 1000000 / CPU_FREQ;
-	return 0;
 }
 
 // TODO: add support for mmap and munmap syscall.
@@ -53,13 +60,74 @@ uint64 sys_gettimeofday(TimeVal *val, int _tz) // TODO: implement sys_gettimeofd
 * LAB1: you may need to define sys_task_info here
 */
 int sys_task_info(struct TaskInfo *ti) {
+	uint64 pa = useraddr(curr_proc()->pagetable, (uint64)ti);
+	if (pa == 0) return -1;
+	struct TaskInfo *pa_ti = (struct TaskInfo *)pa;
 	struct proc *p = curr_proc();
-	// set the status to Running
-	ti->status = Running;
-	// compute ms elapsed since first scheduled
-	ti->time = (get_cycle() - p->start_time) / (CPU_FREQ / 1000);
-	// move the syscall tracker array safely into the user struct
-	memmove(ti->syscall_times, p->syscall_times, sizeof(p->syscall_times));
+	pa_ti->status = Running;
+	pa_ti->time = (get_cycle() - p->start_time) / (CPU_FREQ / 1000);
+	memmove(pa_ti->syscall_times, p->syscall_times, sizeof(p->syscall_times));
+	return 0;
+}
+
+uint64 sys_mmap(uint64 start, uint64 len, int port, int flag, int fd) {
+	if (len == 0) return 0;
+	if (len > 1024 * 1024 * 1024) return -1; // if it's 1 gigya upper limit check
+	if ((port & ~0x7) != 0) return -1;       // all other bits must be 0
+	if ((port & 0x7) == 0) return -1;        // if unreadable/unwritable/unexecutable is meaningless
+
+	uint64 a = PGROUNDDOWN(start);
+	uint64 last = PGROUNDDOWN(start + len - 1);
+	struct proc *p = curr_proc();
+	
+	// permissions from port to PTE flags
+	int perm = PTE_U;
+	if (port & 1) perm |= PTE_R;
+	if (port & 2) perm |= PTE_W;
+	if (port & 4) perm |= PTE_X;
+
+	// check if any page in the range is already mapped
+	for (uint64 va = a; va <= last; va += PGSIZE) {
+		if (walkaddr(p->pagetable, va) != 0) {
+			return -1; 
+		}
+	}
+
+	// start allocate and map the physical pages
+	for (uint64 va = a; va <= last; va += PGSIZE) {
+		void *pa = kalloc();
+		if (pa == 0) {
+			// if it's insufficient physical memory then rollback previous allocations.
+			uvmunmap(p->pagetable, a, (va - a) / PGSIZE, 1);
+			return -1; 
+		}
+		if (mappages(p->pagetable, va, PGSIZE, (uint64)pa, perm) != 0) {
+			kfree(pa);
+			uvmunmap(p->pagetable, a, (va - a) / PGSIZE, 1);
+			return -1;
+		}
+	}
+	return 0;
+}
+
+uint64 sys_munmap(uint64 start, uint64 len) {
+	if (len == 0) return 0;
+	
+	uint64 a = PGROUNDDOWN(start);
+	uint64 last = PGROUNDDOWN(start + len - 1);
+	struct proc *p = curr_proc();
+
+	// ensure all pages in the range are actually mapped
+	for (uint64 va = a; va <= last; va += PGSIZE) {
+		if (walkaddr(p->pagetable, va) == 0) {
+			return -1; // unmapped virtual memory exists
+		}
+	}
+
+	// start unmap and free the physical memory
+	for (uint64 va = a; va <= last; va += PGSIZE) {
+		uvmunmap(p->pagetable, va, 1, 1);
+	}
 	return 0;
 }
 
@@ -97,6 +165,12 @@ void syscall()
 	*/
 	case SYS_task_info:
 		ret = sys_task_info((struct TaskInfo *)args[0]);
+		break;
+	case SYS_mmap:
+		ret = sys_mmap(args[0], args[1], args[2], args[3], args[4]);
+		break;
+	case SYS_munmap:
+		ret = sys_munmap(args[0], args[1]);
 		break;
 	default:
 		ret = -1;
