@@ -53,6 +53,7 @@ struct proc *fetch_task()
 		return NULL;
 	}
 	debugf("fetch task %d(pid=%d) to task queue\n", index, pool[index].pid);
+	pool[index].stride += pool[index].pass;
 	return pool + index;
 }
 
@@ -83,6 +84,9 @@ found:
 	p->max_page = 0;
 	p->parent = NULL;
 	p->exit_code = 0;
+	p->priority = 16;
+	p->stride = 0;
+	p->pass = 0x7FFFFFFF / 16; 
 	p->pagetable = uvmcreate((uint64)p->trapframe);
 	memset(&p->context, 0, sizeof(p->context));
 	memset((void *)p->kstack, 0, KSTACK_SIZE);

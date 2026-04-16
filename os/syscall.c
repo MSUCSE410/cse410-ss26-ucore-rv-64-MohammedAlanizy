@@ -94,13 +94,40 @@ uint64 sys_wait(int pid, uint64 va)
 
 uint64 sys_spawn(uint64 va)
 {
-	// TODO: your job is to complete the sys call
-	return -1;
+	char name[MAX_STR_LEN];
+	struct proc *p = curr_proc();
+	
+	// Safely copy the requested filename from user memory
+	copyinstr(p->pagetable, name, va, MAX_STR_LEN);
+	
+	// Verify the executable exists
+	int id = get_id_by_name(name);
+	if (id < 0) return -1;
+	
+	// Allocate a new process
+	struct proc *np = allocproc();
+	if (np == 0) return -1; // Insufficient memory/process pool full
+	
+	// Load the new executable into the newly allocated process
+	loader(id, np);
+	
+	np->parent = p;
+	add_task(np);
+	
+	return np->pid;
 }
 
 uint64 sys_set_priority(long long prio){
-    // TODO: your job is to complete the sys call
-    return -1;
+	//  check according to project specs 
+	if (prio < 2) return -1; 
+	
+	struct proc *p = curr_proc();
+	p->priority = prio;
+	
+	// Recalculate pass with the new priority
+	p->pass = 0x7FFFFFFF / prio; 
+	
+	return prio;
 }
 
 
@@ -147,6 +174,9 @@ void syscall()
 		break;
 	case SYS_spawn:
 		ret = sys_spawn(args[0]);
+		break;
+	case SYS_setpriority: 
+		ret = sys_set_priority(args[0]);
 		break;
 	default:
 		ret = -1;
