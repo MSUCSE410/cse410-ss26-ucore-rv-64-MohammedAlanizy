@@ -143,6 +143,17 @@ found:
 	p->next_semaphore_id = 0;
 	p->next_condvar_id = 0;
 	// LAB5: (1) you may initialize your new proc variables here
+	p->deadlock_detect_enabled = 0;
+	for (int i = 0; i < LOCK_POOL_SIZE; i++) {
+		p->mutex_available[i] = 0;
+		p->sem_available[i] = 0;
+		for (int j = 0; j < NTHREAD; j++) {
+			p->mutex_allocation[j][i] = 0;
+			p->mutex_request[j][i] = 0;
+			p->sem_allocation[j][i] = 0;
+			p->sem_request[j][i] = 0;
+		}
+	}
 	return p;
 }
 
@@ -180,13 +191,10 @@ found:
 	// user stack
 	t->ustack = get_thread_ustack_base_va(t);
 	if (alloc_user_res != 0) {
-		if (uvmmap(p->pagetable, t->ustack, USTACK_SIZE / PAGE_SIZE,
-			   PTE_U | PTE_R | PTE_W) < 0) {
+		if (uvmmap(p->pagetable, t->ustack, USTACK_SIZE / PAGE_SIZE, PTE_U | PTE_R | PTE_W) < 0) {
 			panic("map ustack fail");
 		}
-		p->max_page =
-			MAX(p->max_page,
-			    PGROUNDUP(t->ustack + USTACK_SIZE - 1) / PAGE_SIZE);
+		p->max_page = MAX(p->max_page, PGROUNDUP(t->ustack + USTACK_SIZE - 1) / PAGE_SIZE);
 	}
 	// trap frame
 	t->trapframe = (struct trapframe *)trapframe[p - pool][tid];
@@ -278,7 +286,7 @@ void freepagetable(pagetable_t pagetable, uint64 max_page)
 void freethread(struct thread *t)
 {
 	pagetable_t pt = t->process->pagetable;
-	// fill with junk
+	// fill with junk all the way to their fans... 
 	memset((void *)t->trapframe, 6, TRAP_PAGE_SIZE);
 	memset(&t->context, 6, sizeof(t->context));
 	uvmunmap(pt, get_thread_trapframe_va(t->tid), 1, 0);
